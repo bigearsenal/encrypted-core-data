@@ -1708,8 +1708,18 @@ static void dbsqliteStripCaseDiacritics(sqlite3_context *context, int argc, cons
 }
 
 - (BOOL) reportUniquenessConstraintsMalformed:(NSEntityDescription *)entity error:(NSError **)error {
-	if (error)
-		*error = [NSError errorWithDomain: [EncryptedStoreOptionsKeys optionErrorDomain] code:EncryptedStoreErrorUniquenessConstraintsMalformed userInfo:@{[EncryptedStoreOptionsKeys optionErrorMessageKey] :@"cannot parse uniquenessConstraints"}];
+	if (error) {
+		NSString *domain = @"EncryptedStoreOptionsKeysDomain";
+
+		NSDictionary *userInfo = @{
+					   NSLocalizedDescriptionKey: NSLocalizedString(@"cannot parse uniquenessConstraints.", nil),
+					   NSLocalizedFailureReasonErrorKey: NSLocalizedString(@"The operation timed out.", nil),
+					   NSLocalizedRecoverySuggestionErrorKey: NSLocalizedString(@"Have you tried turning it off and on again?", nil)
+					   };
+		*error = [NSError errorWithDomain:domain
+							code:-57
+						    userInfo:userInfo];
+	}
 	return NO;
 }
 
