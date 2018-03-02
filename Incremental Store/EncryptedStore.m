@@ -1657,39 +1657,103 @@ static void dbsqliteStripCaseDiacritics(sqlite3_context *context, int argc, cons
 
 - (BOOL)createTableForEntity:(NSEntityDescription *)entity error:(NSError**)error {
     // Skip sub-entities since the super-entities should handle
-    // creating columns for all their children.
-    if (entity.superentity) {
-        return YES;
-    }
-    
-    // prepare columns
-    NSMutableArray *columns = [NSMutableArray arrayWithObject:@"'__objectid' integer primary key"];
-    if (entity.subentities.count > 0) {
-        // NOTE: Will use '-[NSString hash]' to determine the entity type so we can use
-        //       faster integer-indexed queries.  Any string greater than 96-chars is
-        //       not guaranteed to produce a unique hash value, but for entity names that
-        //       shouldn't be a problem.
-        [columns addObject:@"'__entityType' integer"];
-    }
-    
-    [columns addObjectsFromArray:[self columnNamesForEntity:entity indexedOnly:NO quotedNames:YES]];
-    
-    // create table
-    NSString *string = [NSString stringWithFormat:
-                        @"CREATE TABLE %@ (%@);",
-                        [self tableNameForEntity:entity],
-                        [columns componentsJoinedByString:@", "]];
-    sqlite3_stmt *statement = [self preparedStatementForQuery:string];
-    sqlite3_step(statement);
-    
-    BOOL result = (statement != NULL && sqlite3_finalize(statement) == SQLITE_OK);
-    if (!result && error) {
-        *error = [self databaseError];
-        return result;
-    }
-    
-    
-    return [self createIndicesForEntity:entity error:error];
+	// creating columns for all their children.
+	if (entity.superentity) {
+		return YES;
+	}
+
+	// prepare columns
+	NSMutableArray *columns = [NSMutableArray arrayWithObject:@"'__objectid' integer primary key"];
+	if (entity.subentities.count > 0) {
+		// NOTE: Will use '-[NSString hash]' to determine the entity type so we can use
+		// faster integer-indexed queries. Any string greater than 96-chars is
+		// not guaranteed to produce a unique hash value, but for entity names that
+		// shouldn't be a problem.
+		[columns addObject:@"'__entityType' integer"];
+	}
+
+	[columns addObjectsFromArray:[self columnNamesForEntity:entity indexedOnly:NO quotedNames:YES]];
+
+	NSArray<NSString *> *constraints = [self constraintsQueryFragmentForEntity:entity error:error];
+
+	if (constraints == nil)
+		// error
+		return NO;
+
+	NSString *string = nil;
+
+	if (constraints.count)
+		string = [NSString stringWithFormat: @"CREATE TABLE %@ (%@, %@);",
+		[self tableNameForEntity:entity],
+		[columns componentsJoinedByString:@", "],
+		[constraints componentsJoinedByString:@", "]];
+	else
+		string = [NSString stringWithFormat: @"CREATE TABLE %@ (%@);",
+		[self tableNameForEntity:entity],
+		[columns componentsJoinedByString:@", "]];
+
+	NSLog(@"create table query: %@", string);
+
+	sqlite3_stmt *statement = [self preparedStatementForQuery:string];
+	sqlite3_step(statement);
+
+	BOOL result = (statement != NULL && sqlite3_finalize(statement) == SQLITE_OK);
+	if (!result && error) {
+		*error = [self databaseError];
+		return result;
+	}
+
+	return [self createIndicesForEntity:entity error:error];
+
+}
+
+- (BOOL) reportUniquenessConstraintsMalformed:(NSEntityDescription *)entity error:(NSError **)error {
+	if (error)
+		*error = [NSError errorWithDomain: [EncryptedStoreOptionsKeys optionErrorDomain] code:EncryptedStoreErrorUniquenessConstraintsMalformed userInfo:@{[EncryptedStoreOptionsKeys optionErrorMessageKey] :@"cannot parse uniquenessConstraints"}];
+	return NO;
+}
+
+- (NSString *) constraintsQueryFragmentForUniqConstraint:(NSArray *)contsraintColumns tableName:(NSString *)tableName error:(NSError **)error {
+	NSMutableArray<NSString *> *constraintElems = [[NSMutableArray<NSString *> alloc] init];
+	for (id element in contsraintColumns) {
+		if ( [element isKindOfClass:[NSString class]]) {
+			[constraintElems addObject:(NSString *)element];
+		} else
+			return nil;
+	}
+
+	NSString *joined = [constraintElems componentsJoinedByString:@"_"];
+	NSString *escaped = [NSString stringWithFormat:@"'%@'", [constraintElems componentsJoinedByString:@"','"]];
+
+	return [NSString stringWithFormat: @"CONSTRAINT %@_%@ UNIQUE (%@)", tableName, joined, escaped];
+}
+
+- (NSArray<NSString *> *) constraintsQueryFragmentForEntity:(NSEntityDescription *)entity error:(NSError **)error {
+	// в случае ошибки возвращает nil, возврат пустого массива означает, что нет констраинтов
+
+	NSMutableArray<NSString *> *parts = [[NSMutableArray<NSString *> alloc] init];
+
+	if (entity.superentity)
+		return parts;
+
+	NSArray<NSArray *> *uniquenessConstraints = [entity uniquenessConstraints];
+	if (! uniquenessConstraints.count)
+		return parts;
+
+	for (id constraint in uniquenessConstraints ) {
+		if ([constraint isKindOfClass:[NSArray class]]) {
+			NSString *part = [self constraintsQueryFragmentForUniqConstraint:(NSArray *)constraint tableName:[self tableNameForEntity:entity] error:error];
+			if (part == nil) {
+				[self reportUniquenessConstraintsMalformed:entity error:error];
+				return nil;
+			}
+			[parts addObject:part];
+		} else {
+			[self reportUniquenessConstraintsMalformed:entity error:error];
+			return nil;
+		}
+	}
+	return parts;
 }
 
 - (BOOL)createIndicesForEntity:(NSEntityDescription *)entity error:(NSError **)error
